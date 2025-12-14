@@ -129,5 +129,6 @@ def track_video_outliers(video_path):
 
 if __name__ == '__main__':
     # 🚨 REPLACE 'path/to/your/video.mp4' with the actual path to your video file.
-    video_file = 'C:/Users/kingc/Desktop/OutlierTracker/starrynight.mp4' 
+    video_file = 'your/path/to/video_file/here/starrynight.mp4' 
+
     track_video_outliers(video_file)
