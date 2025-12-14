@@ -151,7 +151,7 @@ def process_image_sequence(image_paths, output_csv_path='moving_dots_image_data.
 if __name__ == '__main__':
     # --- CONFIGURATION ---
     # 🚨 1. SET THE DIRECTORY CONTAINING YOUR SEQUENTIAL IMAGES
-    image_directory = 'C:/Users/kingc/Desktop/OutlierTracker/'
+    image_directory = 'your/path/to/images/folder/here'
     # Use a pattern to match your files (e.g., 'frame_001.png', 'frame_002.png', etc.)
     image_pattern = image_directory + 'frame_*.png' 
     
@@ -159,8 +159,9 @@ if __name__ == '__main__':
     all_images = sorted(glob.glob(image_pattern))
 
     # 🚨 2. SET YOUR OUTPUT CSV PATH
-    output_data_file = 'C:/Users/kingc/Desktop/OutlierTracker/moving_dot_tracks.csv'
+    output_data_file = 'your/path/to/images/folder/here/moving_dot_tracks.csv'
 
     # --- EXECUTION ---
     print(f"Found {len(all_images)} images to process.")
+
     process_image_sequence(all_images, output_data_file)
