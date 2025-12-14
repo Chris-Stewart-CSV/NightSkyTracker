@@ -1,16 +1,12 @@
 import cv2
 import numpy as np
 import csv
-import atexit # NEW: Optional import for more robust shutdown handling
-
-# ... (The track_video_outliers function definition remains the same as before, 
-#      but we will rename it and move the file saving logic outside.) ...
-
 
 def process_video_frames(video_path):
     """
-    Tracks dots in the video and returns the list of logged moving dots.
-    The file saving logic is moved out of this function.
+    Tracks dots in the video, identifies and logs moving (outlier) dots 
+    with refined parameters for better stability.
+    Returns the list of logged moving dots.
     """
     
     # --- DATA STORAGE INITIALIZATION ---
@@ -22,8 +18,7 @@ def process_video_frames(video_path):
         print(f"Error: Could not open video file at {video_path}")
         return moving_dot_log
 
-    # Read the first frame... (remaining initialization logic as before)
-    # ...
+    # Read the first frame
     ret, prev_frame_bgr = cap.read()
     if not ret:
         print("Error: Could not read first frame.")
@@ -31,9 +26,14 @@ def process_video_frames(video_path):
     
     prev_gray = cv2.cvtColor(prev_frame_bgr, cv2.COLOR_BGR2GRAY)
     
+    # --- 2. Feature Detection (INITIAL PARAMETERS) ---
+    # Refinement 1: Increased qualityLevel and minDistance to filter weak/noisy features
     prev_points = cv2.goodFeaturesToTrack(
         prev_gray,
-        maxCorners=1000, qualityLevel=0.01, minDistance=10, blockSize=3
+        maxCorners=1000,          
+        qualityLevel=0.05,        # Adjusted from 0.01
+        minDistance=15,           # Adjusted from 10
+        blockSize=3
     )
     
     if prev_points is None or len(prev_points) < 4:
@@ -43,12 +43,13 @@ def process_video_frames(video_path):
 
     print(f"Successfully detected {len(prev_points)} initial features.")
     
+    # --- Resizable Window Fix ---
     cv2.namedWindow('Moving Dot Tracker (Red = Moving, Green = Stationary)', cv2.WINDOW_NORMAL)
 
     # --- 3. Start Frame Processing Loop ---
     frame_count = 1
     
-    try: # <--- NEW: Start the try block
+    try: 
         while(cap.isOpened()):
             ret, next_frame_bgr = cap.read()
             frame_count += 1
@@ -59,28 +60,38 @@ def process_video_frames(video_path):
 
             next_gray = cv2.cvtColor(next_frame_bgr, cv2.COLOR_BGR2GRAY)
             
-            # ... (The rest of the feature tracking, RANSAC, and outlier isolation logic) ...
-
+            # --- 4. Feature Tracking (Lucas-Kanade Optical Flow) ---
+            # Refinement 3: Increased winSize for smoother tracking of large/noisy dots
             next_points, status, err = cv2.calcOpticalFlowPyrLK(
                 prev_gray, next_gray, prev_points, None, 
-                winSize=(15, 15), maxLevel=2, 
+                winSize=(21, 21), # Adjusted from (15, 15)
+                maxLevel=2, 
                 criteria=(cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 0.03)
             )
 
+            # CRITICAL FIX: Flatten status mask for correct indexing
             status_mask = status.flatten() == 1
             prev_tracked_points = prev_points[status_mask]
             next_tracked_points = next_points[status_mask]
 
             if len(prev_tracked_points) < 4:
                 print(f"Frame {frame_count}: Not enough tracked points. Re-detecting features.")
-                prev_points = cv2.goodFeaturesToTrack(next_gray, maxCorners=1000, qualityLevel=0.01, minDistance=10, blockSize=3)
+                # Re-detection must use the same refined parameters
+                prev_points = cv2.goodFeaturesToTrack(
+                    next_gray, maxCorners=1000, qualityLevel=0.05, minDistance=15, blockSize=3
+                )
                 prev_gray = next_gray
                 if prev_points is not None:
                     print(f"Re-detected {len(prev_points)} features.")
                 continue
 
+            # --- 5. Motion Model Estimation and Outlier Isolation (RANSAC) ---
+            # Refinement 1: Decreased RANSAC threshold for stricter stationary definition
             H, mask = cv2.findHomography(
-                prev_tracked_points, next_tracked_points, cv2.RANSAC, ransacReprojThreshold=5.0 
+                prev_tracked_points, 
+                next_tracked_points, 
+                cv2.RANSAC, 
+                ransacReprojThreshold=2.0 # Adjusted from 5.0
             )
 
             if mask is not None:
@@ -99,14 +110,14 @@ def process_video_frames(video_path):
                         'y_coord': y
                     })
 
-                # --- 6. Visualization and Output ---
+                # --- 6. Visualization ---
                 for dot in inlier_points:
                     x, y = dot.ravel().astype(int)
-                    cv2.circle(next_frame_bgr, (x, y), 3, (0, 255, 0), -1) 
+                    cv2.circle(next_frame_bgr, (x, y), 3, (0, 255, 0), -1) # Green = Stationary
 
                 for dot in outlier_points:
                     x, y = dot.ravel().astype(int)
-                    cv2.circle(next_frame_bgr, (x, y), 5, (0, 0, 255), -1) 
+                    cv2.circle(next_frame_bgr, (x, y), 5, (0, 0, 255), -1) # Red = Moving
                     
                 print(f"Frame {frame_count}: Found {len(inlier_points)} stationary dots (Green) and {len(outlier_points)} moving dots (Red).")
 
@@ -118,22 +129,23 @@ def process_video_frames(video_path):
             if mask is not None:
                 prev_points = next_tracked_points[inlier_mask]
             else:
-                prev_points = cv2.goodFeaturesToTrack(prev_gray, maxCorners=1000, qualityLevel=0.01, minDistance=10, blockSize=3)
+                # Fallback: re-detect if RANSAC failed
+                prev_points = cv2.goodFeaturesToTrack(prev_gray, maxCorners=1000, qualityLevel=0.05, minDistance=15, blockSize=3)
 
             # Press 'q' to exit the loop early
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
                 
-    except Exception as e: # Catches any unexpected error during processing
+    except Exception as e: 
         print(f"\n--- Processing Interrupted by Error --- \n{e}")
         
-    finally: # <--- CRUCIAL: Code here always executes, even on 'break' or error
+    finally: # CODE HERE ALWAYS EXECUTES (Guaranteed Cleanup and Data Return)
         # --- 7. Cleanup ---
         cap.release()
         cv2.destroyAllWindows()
         print("\nVideo processing and display windows closed.")
         
-    return moving_dot_log # Return the data collected thus far
+    return moving_dot_log 
 
 
 def save_dot_data(data_log, output_csv_path):
@@ -153,11 +165,18 @@ def save_dot_data(data_log, output_csv_path):
 
 
 if __name__ == '__main__':
-	video_file = 'your/path/to/video_file/here/starrynight.mp4' 
+    # --- CONFIGURATION ---
+    # 🚨 1. SET YOUR VIDEO FILE PATH
+    video_file = 'your/path/to/video_file/here/starrynight.mp4' 
+    
+    # 🚨 2. SET YOUR OUTPUT CSV PATH
     output_data_file = 'your/path/to/ouput_data/here/moving_dot_tracks.csv'
 
-    # 1. Process the video, trapping any interruptions gracefully
+    # --- EXECUTION ---
+    print(f"Starting processing of: {video_file}")
+    
+    # 1. Process the video (data collected, even on interrupt)
     collected_data = process_video_frames(video_file)
     
-    # 2. Save the data collected up to the point of termination
+    # 2. Save the data collected up to the point of termination (guaranteed to run)
     save_dot_data(collected_data, output_data_file)
